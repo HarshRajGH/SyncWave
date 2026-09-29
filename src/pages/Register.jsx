@@ -35,14 +35,14 @@ export default function Register({ onRegister, currentUser, onLogout }) {
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validate()) {
       setFormNote({ text: 'Please fix the highlighted fields.', type: 'is-error' });
       return;
     }
 
-    const result = onRegister({
+    const result = await onRegister({
       name: name.trim(),
       email: email.trim().toLowerCase(),
       password,

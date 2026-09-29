@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import ParticipantList from '../components/ParticipantList';
 import ChatBox from '../components/ChatBox';
 import ProgressBar from '../components/ProgressBar';
 import Button from '../components/Button';
+import api from '../services/api';
 
 export default function WaveRoom({
   waves = [],
@@ -14,14 +15,20 @@ export default function WaveRoom({
   const { id } = useParams();
   const navigate = useNavigate();
 
-  const wave = waves.find((w) => w.id === id);
+  const foundWave = waves.find((w) => w.id === id);
+  const [wave, setWave] = useState(foundWave);
 
-  // If wave not found, redirect to dashboard
+  // Sync or fetch wave from API
   useEffect(() => {
-    if (!wave && waves.length > 0) {
-      navigate('/dashboard');
+    if (foundWave) {
+      setWave(foundWave);
+    } else if (id) {
+      api.waves
+        .getById(id)
+        .then((data) => setWave(data))
+        .catch(() => navigate('/dashboard'));
     }
-  }, [wave, waves, navigate]);
+  }, [id, foundWave, navigate]);
 
   // Session countdown timer state
   const initialSeconds = wave ? wave.duration * 60 : 1800;
@@ -29,25 +36,28 @@ export default function WaveRoom({
   const [quickNotes, setQuickNotes] = useState('');
   const [chatMessages, setChatMessages] = useState([]);
 
-  // Seed default chat messages on mount
+  // Load chat messages from MongoDB
   useEffect(() => {
-    if (wave && currentUser) {
-      setChatMessages([
-        {
-          id: 'm1',
-          author: wave.hostName || 'Host',
-          text: "Welcome everyone! Let's start with the first goal.",
-          me: wave.hostName === currentUser.name,
-        },
-        {
-          id: 'm2',
-          author: currentUser.name,
-          text: 'Sounds good 👍 ready to focus.',
-          me: true,
-        },
-      ]);
+    if (wave?.id) {
+      api.messages
+        .getByWave(wave.id)
+        .then((msgs) => {
+          if (msgs && msgs.length > 0) {
+            setChatMessages(msgs);
+          } else {
+            setChatMessages([
+              {
+                id: 'm1',
+                author: wave.hostName || 'Host',
+                text: "Welcome everyone! Let's start with the first goal.",
+                me: wave.hostName === currentUser?.name,
+              },
+            ]);
+          }
+        })
+        .catch(() => {});
     }
-  }, [wave?.id, currentUser?.name]);
+  }, [wave?.id, wave?.hostName, currentUser?.name]);
 
   // Timer interval
   useEffect(() => {
@@ -81,27 +91,30 @@ export default function WaveRoom({
   const completedGoals = wave.goals.filter((g) => g.done).length;
   const totalGoals = wave.goals.length;
 
-  const handleSendMessage = (text) => {
-    const newMsg = {
-      id: `msg-${Date.now()}`,
-      author: currentUser.name,
-      text,
-      me: true,
-    };
-    setChatMessages((prev) => [...prev, newMsg]);
+  const handleSendMessage = async (text) => {
+    try {
+      const savedMsg = await api.messages.send(wave.id, text);
+      setChatMessages((prev) => [...prev, savedMsg]);
+    } catch {
+      const fallback = {
+        id: `msg-${Date.now()}`,
+        author: currentUser?.name || 'Me',
+        text,
+        me: true,
+      };
+      setChatMessages((prev) => [...prev, fallback]);
+    }
+  };
 
-    // Simulated host reply after 900ms
-    setTimeout(() => {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `msg-${Date.now() + 1}`,
-          author: wave.hostName || 'Study Lead',
-          text: 'Noted! Keep pushing forward on the checklist.',
-          me: false,
-        },
-      ]);
-    }, 900);
+  const handleLeaveWave = async () => {
+    try {
+      if (wave?.id) {
+        await api.waves.leave(wave.id);
+      }
+    } catch (err) {
+      console.error('Leave wave error:', err);
+    }
+    navigate('/dashboard');
   };
 
   return (
@@ -177,7 +190,7 @@ export default function WaveRoom({
 
       {/* Room Controls */}
       <div className="form-actions room-exit">
-        <Button variant="outline" onClick={() => navigate('/dashboard')}>
+        <Button variant="outline" onClick={handleLeaveWave}>
           Leave Wave
         </Button>
         <Button variant="secondary" onClick={() => onEndWave(wave)}>

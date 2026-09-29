@@ -1,12 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, useNavigate } from 'react-router-dom';
-import {
-  STORAGE_KEYS,
-  INITIAL_WAVES,
-  SUBJECT_SUGGESTIONS,
-  readStorage,
-  writeStorage,
-} from './data/mockData';
+import { api, getToken, setToken } from './services/api';
+import { STORAGE_KEYS, SUBJECT_SUGGESTIONS } from './data/mockData';
 
 // Layouts
 import DashboardLayout from './layouts/DashboardLayout';
@@ -30,34 +25,12 @@ export default function App() {
   const navigate = useNavigate();
 
   // --- Auth State ---
-  const [currentUser, setCurrentUser] = useState(() => {
-    const session = readStorage(STORAGE_KEYS.session, null);
-    if (session) return session;
-    const rememberedEmail = localStorage.getItem(STORAGE_KEYS.remember);
-    if (rememberedEmail) {
-      const users = readStorage(STORAGE_KEYS.users, []);
-      return users.find((u) => u.email === rememberedEmail) || null;
-    }
-    return null;
-  });
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
 
-  // --- Waves State ---
-  const [waves, setWaves] = useState(() => {
-    const saved = readStorage(STORAGE_KEYS.waves, null);
-    if (saved && Array.isArray(saved) && saved.length > 0) return saved;
-    writeStorage(STORAGE_KEYS.waves, INITIAL_WAVES);
-    return INITIAL_WAVES;
-  });
-
-  // --- History State ---
-  const [history, setHistory] = useState(() => {
-    return readStorage(STORAGE_KEYS.history, []);
-  });
-
-  // --- Users State ---
-  const [users, setUsers] = useState(() => {
-    return readStorage(STORAGE_KEYS.users, []);
-  });
+  // --- Data State from MongoDB ---
+  const [waves, setWaves] = useState([]);
+  const [history, setHistory] = useState([]);
 
   // --- UI States ---
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -78,33 +51,6 @@ export default function App() {
   useEffect(() => {
     document.body.classList.toggle('is-authed', !!currentUser);
   }, [currentUser]);
-
-  // Persist state changes
-  useEffect(() => {
-    writeStorage(STORAGE_KEYS.waves, waves);
-  }, [waves]);
-
-  useEffect(() => {
-    writeStorage(STORAGE_KEYS.history, history);
-  }, [history]);
-
-  useEffect(() => {
-    writeStorage(STORAGE_KEYS.users, users);
-  }, [users]);
-
-  // Listen for storage changes across tabs
-  useEffect(() => {
-    const handleStorage = (e) => {
-      if (e.key === STORAGE_KEYS.waves) {
-        setWaves(readStorage(STORAGE_KEYS.waves, []));
-      }
-      if (e.key === STORAGE_KEYS.history) {
-        setHistory(readStorage(STORAGE_KEYS.history, []));
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
-  }, []);
 
   // --- Toast Manager ---
   const showToast = useCallback((message, type = 'success') => {
@@ -127,124 +73,174 @@ export default function App() {
     }, 3200);
   }, []);
 
+  // --- Fetch Data from Backend ---
+  const fetchWaves = useCallback(async () => {
+    try {
+      const data = await api.waves.getAll();
+      setWaves(data);
+    } catch (err) {
+      console.error('Failed to load waves:', err);
+    }
+  }, []);
+
+  const fetchHistory = useCallback(async () => {
+    try {
+      const data = await api.history.getAll();
+      setHistory(data);
+    } catch (err) {
+      console.error('Failed to load history:', err);
+    }
+  }, []);
+
+  // Initialize session from JWT token on mount
+  useEffect(() => {
+    const token = getToken();
+    if (token) {
+      api.auth
+        .getMe()
+        .then((res) => {
+          setCurrentUser(res.user);
+        })
+        .catch(() => {
+          setToken(null);
+          setCurrentUser(null);
+        })
+        .finally(() => {
+          setIsAuthLoading(false);
+        });
+    } else {
+      setIsAuthLoading(false);
+    }
+  }, []);
+
+  // Load waves on mount
+  useEffect(() => {
+    fetchWaves();
+  }, [fetchWaves]);
+
+  // Load history whenever currentUser changes
+  useEffect(() => {
+    if (currentUser) {
+      fetchHistory();
+    } else {
+      setHistory([]);
+    }
+  }, [currentUser, fetchHistory]);
+
   // --- Auth Handlers ---
-  const handleLogin = (email, password, remember) => {
-    const found = users.find((u) => u.email === email && u.password === password);
-    if (found) {
-      setCurrentUser(found);
-      writeStorage(STORAGE_KEYS.session, found);
+  const handleLogin = async (email, password, remember) => {
+    try {
+      const res = await api.auth.login(email, password);
+      setToken(res.token);
+      setCurrentUser(res.user);
       if (remember) {
         localStorage.setItem(STORAGE_KEYS.remember, email);
       } else {
         localStorage.removeItem(STORAGE_KEYS.remember);
       }
-      showToast(`Welcome back, ${found.name.split(' ')[0]}!`);
+      showToast(`Welcome back, ${res.user.name.split(' ')[0]}!`);
+      await fetchWaves();
       return true;
+    } catch (err) {
+      showToast(err.message || 'Invalid credentials', 'error');
+      return false;
     }
-    return false;
   };
 
-  const handleRegister = ({ name, email, password }) => {
-    const exists = users.some((u) => u.email === email);
-    if (exists) {
-      return { success: false, message: 'An account with this email already exists.' };
+  const handleRegister = async ({ name, email, password }) => {
+    try {
+      const res = await api.auth.register(name, email, password);
+      setToken(res.token);
+      setCurrentUser(res.user);
+      showToast(`Account created! Welcome to SyncWave, ${name}!`);
+      await fetchWaves();
+      return { success: true };
+    } catch (err) {
+      return { success: false, message: err.message || 'Registration failed.' };
     }
-
-    const newUser = { id: `user-${Date.now()}`, name, email, password };
-    setUsers((prev) => [...prev, newUser]);
-    setCurrentUser(newUser);
-    writeStorage(STORAGE_KEYS.session, newUser);
-    showToast(`Account created! Welcome to SyncWave, ${name}!`);
-    return { success: true };
   };
 
   const handleLogout = () => {
+    setToken(null);
     setCurrentUser(null);
-    localStorage.removeItem(STORAGE_KEYS.session);
+    setHistory([]);
     showToast('Logged out.');
     navigate('/');
   };
 
-  const handleUpdateProfile = (updated) => {
-    setCurrentUser(updated);
-    setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
-    writeStorage(STORAGE_KEYS.session, updated);
-    showToast('Profile updated successfully.');
+  const handleUpdateProfile = async (updated) => {
+    try {
+      const res = await api.auth.updateProfile({
+        name: updated.name,
+        email: updated.email,
+      });
+      setCurrentUser(res.user);
+      showToast('Profile updated successfully.');
+    } catch (err) {
+      showToast(err.message || 'Failed to update profile.', 'error');
+    }
   };
 
   // --- Wave Handlers ---
-  const handleJoinWave = (waveId) => {
-    const target = waves.find((w) => w.id === waveId);
-    if (!target) return;
-
+  const handleJoinWave = async (waveId) => {
     if (!currentUser) {
       navigate('/login');
       return;
     }
 
-    const isAlreadyParticipant = target.participants.some((p) => p.id === currentUser.id);
-
-    if (!isAlreadyParticipant) {
-      if (target.participants.length >= target.max) {
-        showToast('This study wave has reached maximum capacity.', 'error');
-        return;
-      }
-      const updatedWave = {
-        ...target,
-        participants: [...target.participants, { id: currentUser.id, name: currentUser.name }],
-      };
-      setWaves((prev) => prev.map((w) => (w.id === waveId ? updatedWave : w)));
+    try {
+      const updated = await api.waves.join(waveId);
+      setWaves((prev) => prev.map((w) => (w.id === waveId ? updated : w)));
+      showToast(`Joined "${updated.name}".`);
+      navigate(`/waves/${waveId}`);
+    } catch (err) {
+      showToast(err.message || 'Could not join wave.', 'error');
     }
-
-    showToast(`Joined "${target.name}".`);
-    navigate(`/waves/${waveId}`);
   };
 
-  const handleToggleGoal = (waveId, goalId) => {
-    setWaves((prev) =>
-      prev.map((w) => {
-        if (w.id !== waveId) return w;
-        return {
-          ...w,
-          goals: w.goals.map((g) => (g.id === goalId ? { ...g, done: !g.done } : g)),
-        };
-      })
-    );
+  const handleToggleGoal = async (waveId, goalId) => {
+    try {
+      const updated = await api.waves.toggleGoal(waveId, goalId);
+      setWaves((prev) => prev.map((w) => (w.id === waveId ? updated : w)));
+    } catch (err) {
+      showToast(err.message || 'Failed to update goal.', 'error');
+    }
   };
 
-  const handleEndWave = (wave) => {
-    const goalsCompleted = wave.goals.filter((g) => g.done).length;
-    const historyEntry = {
-      id: `hist-${Date.now()}`,
-      waveName: wave.name,
-      subject: wave.subject,
-      duration: wave.duration,
-      goalsCompleted,
-      goalsTotal: wave.goals.length,
-      participants: wave.participants.length,
-      completedAt: Date.now(),
-    };
-
-    setHistory((prev) => [historyEntry, ...prev]);
-    setWaves((prev) => prev.filter((w) => w.id !== wave.id));
-    setCompletedWave(historyEntry);
+  const handleEndWave = async (wave) => {
+    try {
+      const res = await api.waves.end(wave.id);
+      if (res.history) {
+        setHistory((prev) => [res.history, ...prev]);
+        setCompletedWave(res.history);
+      }
+      setWaves((prev) => prev.filter((w) => w.id !== wave.id));
+    } catch (err) {
+      showToast(err.message || 'Failed to end wave.', 'error');
+    }
   };
 
-  const handleClearHistory = () => {
-    setHistory([]);
-    writeStorage(STORAGE_KEYS.history, []);
-    showToast('History cleared.');
+  const handleClearHistory = async () => {
+    try {
+      await api.history.clear();
+      setHistory([]);
+      showToast('History cleared.');
+    } catch (err) {
+      showToast(err.message || 'Failed to clear history.', 'error');
+    }
   };
 
   // --- Create Wave Form Submit ---
-  const handleCreateSubmit = (e) => {
+  const handleCreateSubmit = async (e) => {
     e.preventDefault();
     const errs = {};
 
     if (!newWaveName.trim()) errs.name = 'Give your Wave a name.';
     if (!newWaveSubject.trim()) errs.subject = 'Subject is required.';
     const maxVal = Number(newWaveMax);
-    if (isNaN(maxVal) || maxVal < 2 || maxVal > 12) errs.max = 'Choose between 2 and 12 participants.';
+    if (isNaN(maxVal) || maxVal < 2 || maxVal > 12) {
+      errs.max = 'Choose between 2 and 12 participants.';
+    }
 
     if (Object.keys(errs).length > 0) {
       setCreateErrors(errs);
@@ -256,36 +252,35 @@ export default function App() {
           .split('\n')
           .map((line) => line.trim())
           .filter(Boolean)
-          .map((text, idx) => ({ id: `g${idx}`, text, done: false }))
       : [];
 
-    const newWave = {
-      id: `wave-${Date.now()}`,
-      name: newWaveName.trim(),
-      subject: newWaveSubject.trim(),
-      duration: Number(newWaveDuration),
-      max: maxVal,
-      description: newWaveDesc.trim(),
-      goals: goalsParsed,
-      participants: [{ id: currentUser.id, name: currentUser.name }],
-      hostName: currentUser.name,
-      createdAt: Date.now(),
-    };
+    try {
+      const newWave = await api.waves.create({
+        name: newWaveName.trim(),
+        subject: newWaveSubject.trim(),
+        duration: Number(newWaveDuration),
+        max: maxVal,
+        description: newWaveDesc.trim(),
+        goals: goalsParsed,
+      });
 
-    setWaves((prev) => [newWave, ...prev]);
+      setWaves((prev) => [newWave, ...prev]);
 
-    // Reset Form
-    setNewWaveName('');
-    setNewWaveSubject('');
-    setNewWaveDuration('30');
-    setNewWaveMax('5');
-    setNewWaveDesc('');
-    setNewWaveGoals('');
-    setCreateErrors({});
-    setIsCreateOpen(false);
+      // Reset Form
+      setNewWaveName('');
+      setNewWaveSubject('');
+      setNewWaveDuration('30');
+      setNewWaveMax('5');
+      setNewWaveDesc('');
+      setNewWaveGoals('');
+      setCreateErrors({});
+      setIsCreateOpen(false);
 
-    showToast(`Wave "${newWave.name}" created.`);
-    navigate(`/waves/${newWave.id}`);
+      showToast(`Wave "${newWave.name}" created.`);
+      navigate(`/waves/${newWave.id}`);
+    } catch (err) {
+      showToast(err.message || 'Failed to create wave.', 'error');
+    }
   };
 
   return (
@@ -397,7 +392,10 @@ export default function App() {
         </Route>
 
         {/* Fallback */}
-        <Route path="*" element={<Landing currentUser={currentUser} onLogout={handleLogout} waves={waves} />} />
+        <Route
+          path="*"
+          element={<Landing currentUser={currentUser} onLogout={handleLogout} waves={waves} />}
+        />
       </Routes>
 
       {/* --- Create Wave Modal --- */}

@@ -10,11 +10,11 @@ export default function Profile({ currentUser, onUpdateProfile, history = [] }) 
   const totalSessions = history.length;
   const totalGoals = history.reduce((sum, h) => sum + (h.goalsCompleted || 0), 0);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!name.trim() || !email.trim()) return;
 
-    onUpdateProfile({
+    await onUpdateProfile({
       ...currentUser,
       name: name.trim(),
       email: email.trim().toLowerCase(),

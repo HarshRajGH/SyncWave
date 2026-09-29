@@ -31,14 +31,14 @@ export default function Login({ onLogin, currentUser, onLogout }) {
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validate()) {
       setFormNote('Please fix the highlighted fields.');
       return;
     }
 
-    const success = onLogin(email.trim().toLowerCase(), password, remember);
+    const success = await onLogin(email.trim().toLowerCase(), password, remember);
     if (success) {
       setFormNote('');
       navigate('/dashboard');
