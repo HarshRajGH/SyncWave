@@ -47,6 +47,15 @@ export const api = {
         body: JSON.stringify({ email, password }),
       }),
     getMe: () => request('/auth/me'),
+    google: (credentialOrData) =>
+      request('/auth/google', {
+        method: 'POST',
+        body: JSON.stringify(
+          typeof credentialOrData === 'string'
+            ? { credential: credentialOrData }
+            : credentialOrData
+        ),
+      }),
     updateProfile: (data) =>
       request('/auth/profile', {
         method: 'PUT',

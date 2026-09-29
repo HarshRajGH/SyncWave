@@ -127,7 +127,6 @@ export default function App() {
     }
   }, [currentUser, fetchHistory]);
 
-  // --- Auth Handlers ---
   const handleLogin = async (email, password, remember) => {
     try {
       const res = await api.auth.login(email, password);
@@ -140,10 +139,24 @@ export default function App() {
       }
       showToast(`Welcome back, ${res.user.name.split(' ')[0]}!`);
       await fetchWaves();
-      return true;
+      return { success: true };
     } catch (err) {
-      showToast(err.message || 'Invalid credentials', 'error');
-      return false;
+      showToast(err.message || 'Login failed.', 'error');
+      return { success: false, message: err.message };
+    }
+  };
+
+  const handleGoogleAuth = async (credentialOrData) => {
+    try {
+      const res = await api.auth.google(credentialOrData);
+      setToken(res.token);
+      setCurrentUser(res.user);
+      showToast(`Welcome, ${res.user.name.split(' ')[0]}!`);
+      await fetchWaves();
+      return { success: true };
+    } catch (err) {
+      showToast(err.message || 'Google authentication failed.', 'error');
+      return { success: false, message: err.message };
     }
   };
 
@@ -302,6 +315,7 @@ export default function App() {
           element={
             <Login
               onLogin={handleLogin}
+              onGoogleAuth={handleGoogleAuth}
               currentUser={currentUser}
               onLogout={handleLogout}
             />
@@ -312,6 +326,7 @@ export default function App() {
           element={
             <Register
               onRegister={handleRegister}
+              onGoogleAuth={handleGoogleAuth}
               currentUser={currentUser}
               onLogout={handleLogout}
             />
